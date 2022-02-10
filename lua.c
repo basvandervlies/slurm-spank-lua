@@ -1073,7 +1073,18 @@ int load_spank_options_table (struct lua_script *script, spank_t sp)
     return (0);
 }
 
-static struct lua_script * lua_script_create (lua_State *L, const char *path)
+static struct lua_script * lua_script_create (const char *path)
+{
+    struct lua_script *script = malloc (sizeof (*script));
+    script->path = strdup (path);
+    script->L = luaL_newstate ();
+    luaL_openlibs (script->L);
+
+    SPANK_table_create (script->L);
+    script->fail_on_error = 0;
+}
+
+static struct lua_script * lua_script_create_old (lua_State *L, const char *path)
 {
     struct lua_script *script = malloc (sizeof (*script));
 
@@ -1130,9 +1141,13 @@ static struct lua_script * lua_script_create (lua_State *L, const char *path)
 
 static void lua_script_destroy (struct lua_script *s)
 {
+    /* HvB
     free (s->path);
     luaL_unref (global_L, LUA_REGISTRYINDEX, s->ref);
+    */
     /* Only call lua_close() on the main lua state  */
+    luaL_unref (s->L, LUA_REGISTRYINDEX, s->ref);
+    lua_close(s->L);
     free (s);
 }
 
@@ -1142,7 +1157,10 @@ static int ef (const char *p, int eerrno)
     return (-1);
 }
 
+/* HvB
 List lua_script_list_create (lua_State *L, const char *pattern)
+*/
+List lua_script_list_create (const char *pattern)
 {
     glob_t gl;
     size_t i;
@@ -1157,7 +1175,10 @@ List lua_script_list_create (lua_State *L, const char *pattern)
             l = list_create ((ListDelF) lua_script_destroy);
             for (i = 0; i < gl.gl_pathc; i++) {
                 struct lua_script * s;
+                /* HvB
                 s = lua_script_create (L, gl.gl_pathv[i]);
+                */
+                s = lua_script_create (gl.gl_pathv[i]);
                 if (s == NULL) {
                     slurm_error ("lua_script_create failed for %s.",
                             gl.gl_pathv[i]);
@@ -1323,39 +1344,40 @@ int spank_lua_init (spank_t sp, int ac, char *av[])
         return (-1);
     }
 
+    /* HvB
     global_L = luaL_newstate ();
     luaL_openlibs (global_L);
 
-    /*
      *  Create the global SPANK table
-     */
     SPANK_table_create (global_L);
 
     lua_script_list = lua_script_list_create (global_L, av[0]);
+     */
+    lua_script_list = lua_script_list_create (av[0]);
     if (lua_script_list == NULL) {
         slurm_verbose ("spank/lua: No files found in %s", av[0]);
         return (0);
     }
 
-    /*
-     *  Set up handler for lua_atpanic() so lua doesn't exit() on us.
-     *   This handles errors from outside of protected mode --
-     *   for example when this plugin is processing the global
-     *   spank_options table. The spank_atpanic() function will
-     *   return to the setjmp() point below (thus avoiding Lua's
-     *   call to exit() from its own panic handler). This is basically
-     *   here so that we can use luaL_error() everwhere without
-     *   worrying about the context of the call.
-     */
-    lua_atpanic (global_L, spank_atpanic);
-    if (setjmp (panicbuf)) {
-        slurm_error ("spank/lua: PANIC: %s: %s",
-                av[0], lua_tostring (global_L, -1));
-        return (-1);
-    }
 
     i = list_iterator_create (lua_script_list);
     while ((script = list_next (i))) {
+        /*
+         *  Set up handler for lua_atpanic() so lua doesn't exit() on us.
+         *   This handles errors from outside of protected mode --
+         *   for example when this plugin is processing the global
+         *   spank_options table. The spank_atpanic() function will
+         *   return to the setjmp() point below (thus avoiding Lua's
+         *   call to exit() from its own panic handler). This is basically
+         *   here so that we can use luaL_error() everwhere without
+         *   worrying about the context of the call.
+         */
+        lua_atpanic (script->L, spank_atpanic);
+        if (setjmp (panicbuf)) {
+            slurm_error ("spank/lua: PANIC: %s: %s",
+                    av[0], lua_tostring (script->L, -1));
+            return (-1);
+        }
         script->fail_on_error = opt.fail_on_error;
 
         /*
@@ -1507,7 +1529,7 @@ int slurm_spank_exit (spank_t sp, int ac, char *av[])
         list_destroy (lua_script_list);
     if (script_option_list)
         list_destroy (script_option_list);
-    lua_close (global_L);
+    // HvB lua_close (global_L);
     return (rc);
 }
 
@@ -1520,7 +1542,7 @@ int slurm_spank_slurmd_exit (spank_t sp, int ac, char *av[])
         list_destroy (lua_script_list);
     if (script_option_list)
         list_destroy (script_option_list);
-    lua_close (global_L);
+    // HvB lua_close (global_L);
     return (rc);
 }
 
